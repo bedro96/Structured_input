@@ -1,0 +1,24 @@
+# Python virtual environment and cache
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+
+# uv lockfile is committed; ignore other generated files
+.uv/
+
+# Environment variables (never commit secrets)
+.env
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
