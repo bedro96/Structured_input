@@ -52,6 +52,9 @@ def main() -> int:
     print(f"\nResponse status: {response.status_code}")
     if response.is_success:  # HTTP 2xx 응답인 경우에만 본문 출력
         print(f"\nResponse from API: {response.json()}")
-
+    else :
+        print(f"\nError response from API: {response.text}")
+        return 1  # 비정상 종료 코드 반환
+    
 if __name__ == "__main__":
     sys.exit(main())

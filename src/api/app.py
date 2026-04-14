@@ -123,14 +123,7 @@ class ConversationCreateResponse(BaseModel):
 class MessageRequest(BaseModel):
     json_input: dict[str, Any] = Field(
         ...,
-        user_prompt="에이전트가 응답해야 할 사용자 입력입니다.",
-        variables=[
-            {
-                "recipient": "이메일 수신자",
-                "subject": "이메일 제목",
-                "incidentId": "이메일로 알림을 보낼 인시던트 ID",
-            }
-        ],
+        description="에이전트가 응답해야 할 사용자 입력입니다. 변수: recipient(이메일 수신자), subject(이메일 제목), incidentId(이메일로 알림을 보낼 인시던트 ID)",
     )
     conversation_id: str | None = Field(
         default=None,

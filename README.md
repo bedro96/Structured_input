@@ -19,7 +19,7 @@
 ### 1-1. 저장소 클론
 
 ```bash
-git clone <repo-url>
+git clone git@github.com:bedro96/Structured_input.git
 cd Structured_input
 ```
 
@@ -41,7 +41,13 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 uv venv .venv
 ```
 
-### 1-4. 의존성 설치
+### 1-4. 가상환경 활성화
+
+```bash
+source .venv/bin/activate
+```
+
+### 1-5. 의존성 설치
 
 ```bash
 uv sync
@@ -49,7 +55,7 @@ uv sync
 
 `pyproject.toml`에 정의된 모든 의존성이 격리된 가상환경에 설치됩니다.
 
-### 1-5. 환경 변수 설정
+### 1-6. 환경 변수 설정
 
 ```bash
 cp .env.example .env
@@ -57,15 +63,15 @@ cp .env.example .env
 ```
 
 > **💡 참고**: 에이전트를 미리 생성할 필요가 없습니다.  
-> `.env`에 에이전트 이름(`AZURE_AI_AGENT_NAME`)이 지정되어 있지 않거나, 해당 이름의 에이전트가 Foundry 프로젝트에 존재하지 않으면 **앱 실행 시 자동으로 에이전트가 생성**됩니다.
+> `.env`에 에이전트 이름(`AZURE_AI_AGENT_NAME`)으로 해당 이름의 에이전트가 Foundry 프로젝트에 존재하지 않으면 **앱 실행 시 자동으로 에이전트가 생성**됩니다.
 
-### 1-6. Azure 로그인
+### 1-7. Azure 로그인
 
 ```bash
-az login
+az login --use-device-code
 ```
 
-인증은 **Azure Entra ID**의 `DefaultAzureCredential`을 사용합니다. 서비스 주체(Service Principal) 또는 관리 ID(Managed Identity)를 사용하는 환경에서는 별도 로그인이 필요하지 않습니다.
+인증은 통상 **Azure Entra ID**의 `DefaultAzureCredential`을 사용합니다. 이 코드에서는 `AzureCliCredential` 되어 있어서 로그인된 사용자의 Credential을 사용하게 됩니다. 
 
 ---
 
@@ -80,7 +86,7 @@ sequenceDiagram
     participant F as Azure AI Foundry<br/>Agent
     participant M as MCP 서버<br/>(이메일 전송)
 
-    C->>A: POST /api/conversations/{id}/messages<br/>{ json_input: { user_prompt, recipient, subject, incidentId } }
+    C->>A: POST /api/messages<br/>{ json_input: { user_prompt, recipient, subject, incidentId } }
     A->>F: AIProjectClient.send_json_input()<br/>extra_body: { structured_inputs: { recipient, subject, incidentId } }
     Note over F: 시스템 인스트럭션의 템플릿 변수<br/>{{recipient}}, {{subject}}, {{incidentId}}<br/>를 실제 값으로 치환
     F->>M: send_email(to=recipient, subject=subject, body=...)
