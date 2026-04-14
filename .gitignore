@@ -11,7 +11,7 @@ build/
 .uv/
 
 # Environment variables (never commit secrets)
-.env
+#.env
 
 # IDE files
 .vscode/

@@ -23,15 +23,15 @@ import os
 from typing import Any
 
 from azure.ai.projects import AIProjectClient
-from azure.ai.projects.models import MCPTool, PromptAgentDefinition
-from azure.identity import DefaultAzureCredential
+from azure.ai.projects.models import MCPTool, PromptAgentDefinition, StructuredInputDefinition
+from azure.identity import AzureCliCredential
 from dotenv import load_dotenv
 from openai.types.responses.response_input_param import (
     McpApprovalResponse,
     ResponseInputParam,
 )
 
-load_dotenv()
+load_dotenv(override=True)
 
 logger = logging.getLogger(__name__)
 
@@ -51,18 +51,9 @@ def _require_env(name: str) -> str:
     return value
 
 
-def _mcp_server_url() -> str:
-    host = os.environ.get("MCP_SERVER_HOST", "localhost")
-    port = os.environ.get("MCP_SERVER_PORT", "8000")
-    return f"http://{host}:{port}/mcp"
-
-
 # ---------------------------------------------------------------------------
 # Agent client
 # ---------------------------------------------------------------------------
-
-AGENT_NAME = "structured-input-agent"
-
 
 class FoundryAgentClient:
     """
@@ -73,22 +64,28 @@ class FoundryAgentClient:
     def __init__(self) -> None:
         endpoint = _require_env("AZURE_AI_PROJECT_ENDPOINT")
         model = _require_env("AZURE_AI_MODEL_DEPLOYMENT_NAME")
-        mcp_url = _mcp_server_url()
-
+        agent_name = _require_env("AZURE_AI_AGENT_NAME")
+        mcp_label = _require_env("MCP_SERVER_LABEL")
+        mcp_url = _require_env("MCP_SERVER_URL")
+        mcp_require_approval = _require_env("MCP_REQUIRE_APPROVAL")
+        mcp_connection_name = _require_env("MCP_SERVER_CONNECTION_NAME")
         logger.info("Connecting to Foundry project: %s", endpoint)
         logger.info("Model deployment: %s", model)
         logger.info("MCP server URL: %s", mcp_url)
 
         self._endpoint = endpoint
         self._model = model
+        self._agent_name = agent_name
         self._mcp_url = mcp_url
-        self._credential = DefaultAzureCredential()
+        self._mcp_require_approval = mcp_require_approval
+        self._mcp_connection_name = mcp_connection_name
+        self._mcp_label = mcp_label
+        self._credential = AzureCliCredential()
         self._project_client = AIProjectClient(
             endpoint=self._endpoint,
             credential=self._credential,
         )
         self._openai_client = self._project_client.get_openai_client()
-        self._agent_name: str | None = None
         self._agent_version: str | None = None
 
         logger.debug("AIProjectClient and OpenAI client initialised")
@@ -99,42 +96,75 @@ class FoundryAgentClient:
 
     def create_agent(self) -> dict[str, str]:
         """
-        Create (or update) an agent version with the MCP tool attached.
+        First checks whether an agent with *self._agent_name* already exists.
+        If it does, the existing agent is reused; otherwise a brand-new agent
+        is created.  In both cases a new version is then added.
 
         Returns a dict with agent metadata (name, version, id).
         """
-        logger.info("Creating agent '%s' with MCP tool at %s", AGENT_NAME, self._mcp_url)
-
+        # --- Build MCP tool & agent definition --------------------------
         mcp_tool = MCPTool(
-            server_label="structured-input-mcp",
+            server_label=self._mcp_label,
             server_url=self._mcp_url,
-            # Do not require human approval so the agent can call tools freely.
-            require_approval="never",
+            require_approval=self._mcp_require_approval,
         )
         logger.debug("MCPTool configured: server_label=%s server_url=%s", mcp_tool.server_label, mcp_tool.server_url)
 
-        agent = self._project_client.agents.create_version(
-            agent_name=AGENT_NAME,
-            definition=PromptAgentDefinition(
-                model=self._model,
-                instructions=(
-                    "You are a helpful assistant that processes structured customer "
-                    "inquiries and data analysis requests. Use the available MCP tools "
-                    "to route customer inquiries and run data analyses. Always respond "
-                    "in a clear, concise manner."
-                ),
-                tools=[mcp_tool],
+        definition = PromptAgentDefinition(
+            model=self._model,
+            instructions=(
+                "Process the following structured json input."
+                "These variables has highest priority and must be used for calling MCP tools: \n\n"
+                "{{recipient}} is email recipient for MCP server\n"
+                "{{subject}} is email subject for MCP server\n"
+                "{{incidentId}} is incident ID that is intended to use to compose email body.\n"
+                "email body should start with 'Incident ID: {{incidentId}} details:' and then list all details of the incident.\n\n"
+                "If user gave details from user prompt, uses that information. If no information could be found, then "
+                "rest of the body should be mocked up assuming this is a real incident report from factory assembly line with details and next action items.\n\n"
             ),
+            structured_inputs={
+                "recipient": StructuredInputDefinition(
+                    description="The recipient's email address", required=True, schema={"type": "string"},
+                ),
+                "subject": StructuredInputDefinition(
+                    description="The email subject", required=True, schema={"type": "string"},
+                ),
+                "incidentId": StructuredInputDefinition(
+                    description="The ID of the incident to analyze", required=True, schema={"type": "string"},
+                ),
+            },
+            tools=[mcp_tool],
         )
 
+        # --- Check if agent already exists ------------------------------
+        try:
+            existing = self._project_client.agents.get(agent_name=self._agent_name)
+            logger.info("Agent '%s' already exists (id=%s) — reusing", existing.name, existing.id)
+        except Exception:
+            # Agent does not exist — create a brand-new agent (first version)
+            logger.info("Agent '%s' not found — creating new agent", self._agent_name)
+            agent = self._project_client.agents.create_version(
+                agent_name=self._agent_name,
+                definition=definition,
+            )
+            self._agent_name = agent.name
+            self._agent_version = agent.version
+            logger.info(
+                "New agent created | name=%s version=%s id=%s",
+                agent.name, agent.version, agent.id,
+            )
+
+        # --- Agent exists — add a new version ---------------------------
+        logger.info("Adding new version for existing agent '%s'", self._agent_name)
+        agent = self._project_client.agents.create_version(
+            agent_name=self._agent_name,
+            definition=definition,
+        )
         self._agent_name = agent.name
         self._agent_version = agent.version
-
         logger.info(
-            "Agent created | name=%s version=%s id=%s",
-            agent.name,
-            agent.version,
-            agent.id,
+            "Agent version added | name=%s version=%s id=%s",
+            agent.name, agent.version, agent.id,
         )
         return {"name": agent.name, "version": str(agent.version), "id": agent.id}
 
@@ -165,23 +195,20 @@ class FoundryAgentClient:
         logger.info("Conversation created | id=%s", conversation.id)
         return conversation.id
 
-    def send_structured_input(
+    def send_json_input(
         self,
         conversation_id: str,
-        structured_input: dict[str, Any],
-        *,
-        previous_response_id: str | None = None,
+        json_input: dict[str, Any],
     ) -> str:
         """
-        Serialise *structured_input* to a prompt string and send it to the agent
+        Serialise *json_input* to a prompt string and send it to the agent
         via the Responses API, then handle any MCP approval requests automatically.
 
         Args:
-            conversation_id: The conversation id returned by ``create_conversation``.
-            structured_input: Arbitrary dict that will be serialised to JSON and
+            conversation_id: The conversation id given by user and if it is null, 
+            it means it needs to generate a new conversation_id.
+            json_input: Arbitrary dict that will be serialised to JSON and
                 injected into the prompt.
-            previous_response_id: Chain to a previous response for multi-turn
-                conversations.
 
         Returns:
             The agent's final text output.
@@ -189,30 +216,27 @@ class FoundryAgentClient:
         if self._agent_name is None:
             raise RuntimeError("Call create_agent() before sending input.")
 
-        prompt = (
-            "Process the following structured input and use your tools as needed:\n\n"
-            f"```json\n{json.dumps(structured_input, indent=2)}\n```"
-        )
 
         logger.info(
             "Sending structured input to agent | conversation_id=%s agent_name=%s",
             conversation_id,
             self._agent_name,
         )
-        logger.debug("Structured input payload: %s", json.dumps(structured_input, indent=2))
+        logger.debug("Structured input payload: %s", json.dumps(json_input, indent=2))
 
         create_kwargs: dict[str, Any] = {
             "conversation": conversation_id,
-            "input": prompt,
+            "input": json_input.get("user_prompt", ""),
             "extra_body": {
                 "agent_reference": {
                     "name": self._agent_name,
                     "type": "agent_reference",
-                }
+                },
+                "structured_inputs": {"recipient": json_input.get("recipient"),
+                                      "subject": json_input.get("subject"),
+                                      "incidentId": json_input.get("incidentId")},
             },
         }
-        if previous_response_id:
-            create_kwargs["previous_response_id"] = previous_response_id
 
         response = self._openai_client.responses.create(**create_kwargs)
         logger.debug("Initial response received | id=%s", response.id)

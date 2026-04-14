@@ -32,7 +32,7 @@ from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-load_dotenv()
+load_dotenv(override=True)
 
 # ---------------------------------------------------------------------------
 # Verbose logging — always on, regardless of development stage
@@ -117,23 +117,20 @@ class ConversationCreateResponse(BaseModel):
 
 
 class MessageRequest(BaseModel):
-    structured_input: dict[str, Any] = Field(
+    json_input: dict[str, Any] = Field(
         ...,
-        description="Arbitrary structured input payload to send to the agent",
-        examples=[
+        user_prompt="This is user input that the agent should respond to.",
+        variables=[
             {
-                "type": "customer_inquiry",
-                "customer_id": "CUST-001",
-                "inquiry_type": "billing",
-                "message": "I was charged twice for my subscription.",
-                "priority": "high",
-                "metadata": {"account_tier": "premium"},
+                "recipient": "Email recipient",
+                "subject": "Email subject",
+                "incidentId": "incident ID to notify by email.",
             }
         ],
     )
-    previous_response_id: str | None = Field(
+    conversation_id: str | None = Field(
         default=None,
-        description="Chain this message to a previous response for multi-turn conversations",
+        description="Previous conversation ID for multi-turn conversations",
     )
 
 
@@ -165,109 +162,45 @@ def health_check() -> dict[str, str]:
     logger.debug("Health check requested")
     return {"status": "ok", "service": "structured-input-api"}
 
-
 @app.post(
-    "/api/agents",
-    status_code=status.HTTP_201_CREATED,
-    response_model=AgentCreateResponse,
-    tags=["agents"],
-)
-def create_agent() -> AgentCreateResponse:
-    """
-    Create an Azure AI Foundry agent version backed by the MCP server.
-
-    Only one agent version is tracked at a time. Call DELETE /api/agents to
-    clean up before creating a new one.
-    """
-    logger.info("POST /api/agents — creating agent")
-    try:
-        client = _get_client()
-        meta = client.create_agent()
-        state.active_agent = meta
-        logger.info("Agent created | %s", meta)
-        return AgentCreateResponse(**meta)
-    except EnvironmentError as exc:
-        logger.error("Configuration error: %s", exc)
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("Failed to create agent: %s", exc)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
-
-
-@app.delete(
-    "/api/agents",
-    status_code=status.HTTP_204_NO_CONTENT,
-    tags=["agents"],
-)
-def delete_agent() -> None:
-    """Delete the currently active agent version."""
-    logger.info("DELETE /api/agents — deleting agent")
-    if state.agent_client is None or state.active_agent is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No active agent. Create one first with POST /api/agents.",
-        )
-    try:
-        state.agent_client.delete_agent()
-        state.active_agent = None
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("Failed to delete agent: %s", exc)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
-
-
-@app.post(
-    "/api/conversations",
-    status_code=status.HTTP_201_CREATED,
-    response_model=ConversationCreateResponse,
-    tags=["conversations"],
-)
-def create_conversation() -> ConversationCreateResponse:
-    """Create a new conversation thread."""
-    logger.info("POST /api/conversations — creating conversation")
-    if state.agent_client is None or state.active_agent is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No active agent. Create one first with POST /api/agents.",
-        )
-    try:
-        conv_id = state.agent_client.create_conversation()
-        logger.info("Conversation created | id=%s", conv_id)
-        return ConversationCreateResponse(conversation_id=conv_id)
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("Failed to create conversation: %s", exc)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
-
-
-@app.post(
-    "/api/conversations/{conversation_id}/messages",
+    "/api/messages",
     response_model=MessageResponse,
     tags=["conversations"],
 )
-def send_message(conversation_id: str, body: MessageRequest) -> MessageResponse:
+def process_message(body: MessageRequest) -> MessageResponse:
     """
-    Send a structured-input payload to the agent within an existing conversation.
+    Receives a structured-json payload and sends it to the agent.
+    If conversation_id is provided, the message is sent as part of that conversation (enabling multi-turn interactions).
+    The payload is expected to contain a user prompt and any variables needed for MCP tool execution.
+    The API forwards the structured input to the Azure AI Foundry agent, which may call MCP tools. 
+    The agent's text response is returned in the API response, along with the conversation ID for continued interactions.
 
-    The payload is serialised to a JSON prompt, forwarded to the Azure AI Foundry
-    agent (which may call MCP tools on the local server), and the text response
-    is returned.
     """
-    logger.info(
-        "POST /api/conversations/%s/messages — sending structured input",
+    conversation_id = body.conversation_id
+    logger.debug(
+        "POST /api/messages received payload: json_input=%s | conversation_id=%s",
+        body.json_input,
         conversation_id,
     )
-    logger.debug("Payload: %s", body.structured_input)
 
+    # Check if there is active agent client and if yes, use that client to send the message. 
+    # If not, it means the agent has not been created yet, create a new agent client and agent version before sending the message.
     if state.agent_client is None or state.active_agent is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No active agent. Create one first with POST /api/agents.",
-        )
+        logger.info("No active agent client found. Initialising new client and agent version.")
+        client = _get_client()
+        meta = client.create_agent()
+        state.active_agent = meta
+        logger.info("Agent ready | %s", meta)
 
+    if conversation_id is None:
+        logger.info("No conversation_id provided. Starting a new conversation.")
+        new_conversation_id = state.agent_client.create_conversation()
+        logger.info("New conversation started | id=%s", new_conversation_id)
+        conversation_id = new_conversation_id
     try:
-        output = state.agent_client.send_structured_input(
+        output = state.agent_client.send_json_input(
             conversation_id=conversation_id,
-            structured_input=body.structured_input,
-            previous_response_id=body.previous_response_id,
+            json_input=body.json_input,
         )
         return MessageResponse(output=output, conversation_id=conversation_id)
     except Exception as exc:  # noqa: BLE001
