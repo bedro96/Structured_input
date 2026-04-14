@@ -18,7 +18,6 @@ dependencies = [
 ]
 
 [project.scripts]
-mcp-server = "src.mcp_server.server:main"
 console-app = "src.console_app:main"
 api-server = "src.api.app:main"
 

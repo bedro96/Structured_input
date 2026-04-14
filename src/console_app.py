@@ -37,6 +37,8 @@ def main() -> int:
 
     # ----------------------------------------------------------
     # 인시던트 알림 이메일 전송을 위한 구조화된 입력 페이로드 정의
+    # 테스트를 위해서 아래의 메세지를 조정하세요.
+    # ----------------------------------------------------------
     system_alert_message = {
         "json_input": {
             "user_prompt": "Notify the on-call engineer about incident INC7788 via email.",
@@ -45,7 +47,7 @@ def main() -> int:
             "incidentId": "INC7788"
         },
     }
-    print(f"\nSystem_alert_message is system_alert_message={system_alert_message}")
+    print(f"\nSystem_alert_message={system_alert_message} is the message we will send to the agent via POST /api/messages endpoint. The agent will then parse the JSON input and send an email to the on-call engineer based on the provided information.")
 
     # 로컬 API 서버에 구조화된 메시지를 POST 요청으로 전송 (타임아웃: 60초)
     response = httpx.post("http://localhost:8080/api/messages", json=system_alert_message, timeout=60.0)
