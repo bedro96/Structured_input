@@ -1,18 +1,23 @@
 """
-Azure AI Foundry Agent Client.
+Azure AI Foundry 에이전트 클라이언트.
 
-Demonstrates how to:
-  1. Create an AIProjectClient connected to a Microsoft Foundry project.
-  2. Create an agent version with an MCP tool pointing to the local
-     HTTP Streamable MCP server.
-  3. Create an OpenAI conversation (thread).
-  4. Send structured input to the agent and receive the response.
+다음 작업 방법을 보여줍니다:
+  1. Microsoft Foundry 프로젝트에 연결된 AIProjectClient 생성.
+  2. 로컬 HTTP Streamable MCP 서버를 가리키는 MCP 툴이 포함된 에이전트 버전 생성.
+  3. OpenAI 대화(thread) 생성.
+  4. 에이전트에 구조화된 입력을 전송하고 응답 수신.
 
-Environment variables required (see .env.example):
+필요한 환경 변수 (.env.example 참조):
   - AZURE_AI_PROJECT_ENDPOINT
   - AZURE_AI_MODEL_DEPLOYMENT_NAME
-  - MCP_SERVER_HOST  (defaults to localhost)
-  - MCP_SERVER_PORT  (defaults to 8000)
+  - MCP_SERVER_HOST  (기본값: localhost)
+  - MCP_SERVER_PORT  (기본값: 8000)
+
+참고 문서:
+  - Azure AI Foundry 에이전트 개요:
+    https://learn.microsoft.com/ko-kr/azure/ai-foundry/agents/overview
+  - AIProjectClient Python SDK:
+    https://learn.microsoft.com/ko-kr/python/api/azure-ai-projects/azure.ai.projects.aiprojectclient
 """
 
 from __future__ import annotations
@@ -37,11 +42,11 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Configuration helpers
+# 설정 헬퍼
 # ---------------------------------------------------------------------------
 
 def _require_env(name: str) -> str:
-    """Return an environment variable or raise a clear error."""
+    """환경 변수를 반환하거나, 설정되지 않은 경우 명확한 오류를 발생시킵니다."""
     value = os.environ.get(name)
     if not value:
         raise EnvironmentError(
@@ -52,13 +57,19 @@ def _require_env(name: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Agent client
+# 에이전트 클라이언트
 # ---------------------------------------------------------------------------
 
 class FoundryAgentClient:
     """
-    High-level wrapper around AIProjectClient that creates an agent backed by
-    an HTTP Streamable MCP server and sends structured input to it.
+    HTTP Streamable MCP 서버를 기반으로 하는 에이전트를 생성하고
+    구조화된 입력을 전송하는 AIProjectClient 고수준 래퍼 클래스.
+
+    참고 문서:
+      - Azure AI Foundry 에이전트 빠른 시작:
+        https://learn.microsoft.com/ko-kr/azure/ai-foundry/agents/quickstart
+      - MCP 툴 통합:
+        https://learn.microsoft.com/ko-kr/azure/ai-foundry/agents/tools/model-context-protocol
     """
 
     def __init__(self) -> None:
@@ -80,29 +91,34 @@ class FoundryAgentClient:
         self._mcp_require_approval = mcp_require_approval
         self._mcp_connection_name = mcp_connection_name
         self._mcp_label = mcp_label
-        self._credential = AzureCliCredential()
+        self._credential = AzureCliCredential()  # Azure CLI 자격 증명으로 인증 (az login 선행 필요)
         self._project_client = AIProjectClient(
             endpoint=self._endpoint,
             credential=self._credential,
-        )
-        self._openai_client = self._project_client.get_openai_client()
-        self._agent_version: str | None = None
+        )  # Foundry 프로젝트에 연결된 클라이언트 초기화
+        self._openai_client = self._project_client.get_openai_client()  # Responses/Conversations API 호출에 사용할 OpenAI 호환 클라이언트 획득
+        self._agent_version: str | None = None  # create_agent() 호출 후 설정되는 현재 세션의 에이전트 버전
 
         logger.debug("AIProjectClient and OpenAI client initialised")
 
     # ------------------------------------------------------------------
-    # Agent lifecycle
+    # 에이전트 생명주기
     # ------------------------------------------------------------------
 
     def create_agent(self) -> dict[str, str]:
         """
-        First checks whether an agent with *self._agent_name* already exists.
-        If it does, the existing agent is reused; otherwise a brand-new agent
-        is created.  In both cases a new version is then added.
+        *self._agent_name* 과 동일한 이름의 에이전트가 이미 존재하는지 먼저 확인합니다.
+        존재하는 경우 기존 에이전트를 재사용하고, 존재하지 않으면 새 에이전트를 생성합니다.
+        두 경우 모두 새 버전을 추가합니다.
 
-        Returns a dict with agent metadata (name, version, id).
+        반환값:
+            에이전트 메타데이터(name, version, id)를 담은 딕셔너리.
+
+        참고 문서:
+          - 에이전트 버전 관리:
+            https://learn.microsoft.com/ko-kr/azure/ai-foundry/agents/
         """
-        # --- Build MCP tool & agent definition --------------------------
+        # --- MCP 툴 및 에이전트 정의 구성 --------------------------
         mcp_tool = MCPTool(
             server_label=self._mcp_label,
             server_url=self._mcp_url,
@@ -136,12 +152,12 @@ class FoundryAgentClient:
             tools=[mcp_tool],
         )
 
-        # --- Check if agent already exists ------------------------------
+        # --- 에이전트 존재 여부 확인 ------------------------------
         try:
             existing = self._project_client.agents.get(agent_name=self._agent_name)
             logger.info("Agent '%s' already exists (id=%s) — reusing", existing.name, existing.id)
         except Exception:
-            # Agent does not exist — create a brand-new agent (first version)
+            # 에이전트가 없는 경우 — 새 에이전트를 생성 (첫 번째 버전)
             logger.info("Agent '%s' not found — creating new agent", self._agent_name)
             agent = self._project_client.agents.create_version(
                 agent_name=self._agent_name,
@@ -154,7 +170,7 @@ class FoundryAgentClient:
                 agent.name, agent.version, agent.id,
             )
 
-        # --- Agent exists — add a new version ---------------------------
+        # --- 에이전트가 이미 존재하는 경우 — 새 버전 추가 ---------------------------
         logger.info("Adding new version for existing agent '%s'", self._agent_name)
         agent = self._project_client.agents.create_version(
             agent_name=self._agent_name,
@@ -169,7 +185,7 @@ class FoundryAgentClient:
         return {"name": agent.name, "version": str(agent.version), "id": agent.id}
 
     def delete_agent(self) -> None:
-        """Delete the agent version created in this session."""
+        """현재 세션에서 생성된 에이전트 버전을 삭제합니다."""
         if self._agent_name and self._agent_version:
             logger.info(
                 "Deleting agent version | name=%s version=%s",
@@ -185,11 +201,11 @@ class FoundryAgentClient:
             logger.warning("No agent to delete (create_agent was not called)")
 
     # ------------------------------------------------------------------
-    # Conversation & structured input
+    # 대화 및 구조화된 입력
     # ------------------------------------------------------------------
 
     def create_conversation(self) -> str:
-        """Create a new conversation and return its id."""
+        """새 대화를 생성하고 해당 id를 반환합니다."""
         logger.info("Creating conversation thread")
         conversation = self._openai_client.conversations.create()
         logger.info("Conversation created | id=%s", conversation.id)
@@ -201,17 +217,22 @@ class FoundryAgentClient:
         json_input: dict[str, Any],
     ) -> str:
         """
-        Serialise *json_input* to a prompt string and send it to the agent
-        via the Responses API, then handle any MCP approval requests automatically.
+        *json_input*을 프롬프트 문자열로 직렬화하여 Responses API를 통해 에이전트에 전송하고,
+        MCP 승인 요청을 자동으로 처리합니다.
 
         Args:
-            conversation_id: The conversation id given by user and if it is null, 
-            it means it needs to generate a new conversation_id.
-            json_input: Arbitrary dict that will be serialised to JSON and
-                injected into the prompt.
+            conversation_id: 사용자가 제공한 대화 id.
+                None인 경우 새 conversation_id를 생성해야 합니다.
+            json_input: JSON으로 직렬화되어 프롬프트에 삽입될 임의의 딕셔너리.
 
-        Returns:
-            The agent's final text output.
+        반환값:
+            에이전트의 최종 텍스트 출력.
+
+        참고 문서:
+          - Responses API:
+            https://learn.microsoft.com/ko-kr/azure/ai-foundry/agents/
+          - MCP 툴 승인 흐름:
+            https://learn.microsoft.com/ko-kr/azure/ai-foundry/agents/tools/model-context-protocol
         """
         if self._agent_name is None:
             raise RuntimeError("Call create_agent() before sending input.")
@@ -224,6 +245,7 @@ class FoundryAgentClient:
         )
         logger.debug("Structured input payload: %s", json.dumps(json_input, indent=2))
 
+        # Foundry 에이전트 참조 및 구조화된 입력을 extra_body에 포함하여 Responses API에 전달
         create_kwargs: dict[str, Any] = {
             "conversation": conversation_id,
             "input": json_input.get("user_prompt", ""),
@@ -241,8 +263,8 @@ class FoundryAgentClient:
         response = self._openai_client.responses.create(**create_kwargs)
         logger.debug("Initial response received | id=%s", response.id)
 
-        # Handle any MCP tool-approval requests the agent raises
-        approval_list: ResponseInputParam = []
+        # 에이전트가 발생시키는 MCP 툴 승인 요청을 자동 처리
+        approval_list: ResponseInputParam = []  # 자동 승인 응답을 누적할 목록
         for item in response.output:
             if item.type == "mcp_approval_request":
                 logger.info(
@@ -278,7 +300,7 @@ class FoundryAgentClient:
         return output_text
 
     # ------------------------------------------------------------------
-    # Context manager support
+    # 컨텍스트 매니저 지원
     # ------------------------------------------------------------------
 
     def __enter__(self) -> "FoundryAgentClient":

@@ -1,168 +1,259 @@
-# Structured Input → MCP → Azure AI Foundry Agent
+# Azure AI Foundry Agent — Structured Input 데모
 
-A **uv**-based Python ≥ 3.13 project that demonstrates:
-
-1. An **HTTP Streamable MCP server** (FastMCP) exposing tools for structured input processing.
-2. An **Azure AI Foundry agent** (`azure-ai-projects ≥ 2.0.0`) that uses the MCP server as a tool backend.
-3. A **console app** that walks through the full flow end-to-end.
-4. A **FastAPI REST API** that a front-end application can call to interact with the agent.
-
-All components emit **verbose structured logs** to the console via the standard `logging` module.
+> **Microsoft Azure AI Foundry Agent**의 **Structured Input** 기능을 시연하는 Python 데모 프로젝트입니다.  
+> 클라이언트가 JSON POST body에 구조화된 입력을 담아 API 서버로 전달하면, 에이전트가 이를 시스템 인스트럭션의 템플릿 변수로 활용하여 MCP 서버의 이메일 전송 툴을 자동으로 호출합니다.
 
 ---
 
-## Requirements
+## 목차
 
-| Requirement | Value |
-|---|---|
-| Python | ≥ 3.13 |
-| Package manager | [uv](https://docs.astral.sh/uv/) |
-| Azure AI Projects SDK | ≥ 2.0.0 |
-| MCP transport | HTTP Streamable (FastMCP) |
+1. [시작하기 (환경 설정)](#chapter-1-시작하기-환경-설정)
+2. [아키텍처](#chapter-2-아키텍처)
+3. [환경 변수 설정](#chapter-3-환경-변수-설정)
+4. [실행 방법](#chapter-4-실행-방법)
 
 ---
 
-## Quick Start
+## Chapter 1. 시작하기 (환경 설정)
 
-### 1. Install uv
-
-```bash
-pip install uv
-```
-
-### 2. Clone & set up
+### 1-1. 저장소 클론
 
 ```bash
 git clone <repo-url>
 cd Structured_input
+```
 
-# Install all dependencies into a managed virtual environment
+### 1-2. uv 설치
+
+이 프로젝트는 고속 Python 패키지 관리자인 **[uv](https://docs.astral.sh/uv/)** 를 사용합니다.
+
+```bash
+# pip으로 설치 (간단)
+pip install uv
+
+# 또는 공식 설치 스크립트 (Linux/macOS)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+### 1-3. 가상환경 생성
+
+```bash
+uv venv .venv
+```
+
+### 1-4. 의존성 설치
+
+```bash
 uv sync
 ```
 
-### 3. Configure environment
+`pyproject.toml`에 정의된 모든 의존성이 격리된 가상환경에 설치됩니다.
+
+### 1-5. 환경 변수 설정
 
 ```bash
 cp .env.example .env
-# Edit .env and fill in your Azure AI Foundry credentials
+# .env 파일을 열어 Azure AI Foundry 자격증명을 입력하세요
 ```
 
-Required variables:
+> **💡 참고**: 에이전트를 미리 생성할 필요가 없습니다.  
+> `.env`에 에이전트 이름(`AZURE_AI_AGENT_NAME`)이 지정되어 있지 않거나, 해당 이름의 에이전트가 Foundry 프로젝트에 존재하지 않으면 **앱 실행 시 자동으로 에이전트가 생성**됩니다.
 
-| Variable | Description |
-|---|---|
-| `AZURE_AI_PROJECT_ENDPOINT` | Your Foundry project endpoint URL |
-| `AZURE_AI_MODEL_DEPLOYMENT_NAME` | Deployment name of the AI model |
+### 1-6. Azure 로그인
 
-Optional variables (have defaults):
+```bash
+az login
+```
 
-| Variable | Default | Description |
+인증은 **Azure Entra ID**의 `DefaultAzureCredential`을 사용합니다. 서비스 주체(Service Principal) 또는 관리 ID(Managed Identity)를 사용하는 환경에서는 별도 로그인이 필요하지 않습니다.
+
+---
+
+## Chapter 2. 아키텍처
+
+### 전체 흐름 다이어그램
+
+```mermaid
+sequenceDiagram
+    participant C as 콘솔 앱<br/>(console_app.py)
+    participant A as API 서버<br/>(app.py / FastAPI)
+    participant F as Azure AI Foundry<br/>Agent
+    participant M as MCP 서버<br/>(이메일 전송)
+
+    C->>A: POST /api/conversations/{id}/messages<br/>{ json_input: { user_prompt, recipient, subject, incidentId } }
+    A->>F: AIProjectClient.send_json_input()<br/>extra_body: { structured_inputs: { recipient, subject, incidentId } }
+    Note over F: 시스템 인스트럭션의 템플릿 변수<br/>{{recipient}}, {{subject}}, {{incidentId}}<br/>를 실제 값으로 치환
+    F->>M: send_email(to=recipient, subject=subject, body=...)
+    M-->>F: 이메일 전송 완료
+    F-->>A: 에이전트 응답 반환
+    A-->>C: HTTP 200 응답
+```
+
+---
+
+### 핵심 강조 1 — 클라이언트의 구조화된 입력 전달
+
+클라이언트(`console_app.py`)는 다음과 같은 JSON POST body를 API 서버로 전송합니다.
+
+```json
+{
+  "json_input": {
+    "user_prompt": "Notify the on-call engineer about incident INC7788 via email.",
+    "recipient": "kunhoko@kakao.com",
+    "subject": "Incident[ID: INC7788] Notification",
+    "incidentId": "INC7788"
+  }
+}
+```
+
+API 서버(`app.py`)는 이를 받아 `client.py`의 `send_json_input()` 메서드를 호출하면서 `extra_body`에 `structured_inputs`를 포함하여 Foundry 에이전트로 전달합니다.
+
+```python
+# client.py — send_json_input()
+create_kwargs = {
+    "conversation": conversation_id,
+    "input": json_input.get("user_prompt", ""),
+    "extra_body": {
+        "agent_reference": {"name": self._agent_name, "type": "agent_reference"},
+        "structured_inputs": {
+            "recipient": json_input.get("recipient"),
+            "subject":   json_input.get("subject"),
+            "incidentId": json_input.get("incidentId"),
+        },
+    },
+}
+```
+
+---
+
+### 핵심 강조 2 — 시스템 인스트럭션의 템플릿 변수
+
+에이전트의 **시스템 인스트럭션**에는 아래와 같이 이중 중괄호(`{{ }}`)로 감싼 템플릿 변수가 포함됩니다.  
+Foundry가 런타임에 `structured_inputs` 값을 이 자리에 자동으로 채워 넣어 LLM에 전달합니다.
+
+```
+"{{recipient}} is email recipient for MCP server"
+"{{subject}} is email subject for MCP server"
+"{{incidentId}} is incident ID to compose email body."
+```
+
+---
+
+### 핵심 강조 3 — 에이전트 정의의 `structured_inputs` 선언
+
+에이전트를 생성할 때 `PromptAgentDefinition`에 `structured_inputs` 필드를 반드시 선언해야 합니다.  
+각 입력 변수는 `StructuredInputDefinition`으로 타입과 필수 여부를 명시합니다.
+
+```python
+# client.py — create_agent()
+structured_inputs={
+    "recipient": StructuredInputDefinition(
+        description="이메일 수신자 주소",
+        required=True,
+        schema={"type": "string"},
+    ),
+    "subject": StructuredInputDefinition(
+        description="이메일 제목",
+        required=True,
+        schema={"type": "string"},
+    ),
+    "incidentId": StructuredInputDefinition(
+        description="분석할 사건 ID",
+        required=True,
+        schema={"type": "string"},
+    ),
+},
+```
+
+---
+
+### 결과 — LLM이 인스트럭션을 준수하여 이메일 전송
+
+위의 흐름이 정상적으로 완료되면, 에이전트는 MCP 서버의 이메일 전송 툴을 호출하여 지정된 수신자에게 인시던트 알림 이메일을 전송합니다.
+
+![이메일 전송 결과](img/emailcapture.png)
+
+---
+
+### 소스 파일 구조
+
+```
+.
+├── .env.example          # 환경 변수 템플릿
+├── .python-version       # Python 3.13 버전 고정 (uv)
+├── pyproject.toml        # 프로젝트 메타데이터 및 의존성 (uv)
+├── README.md
+└── src/
+    ├── agent/
+    │   └── client.py     # Azure AI Foundry 에이전트 클라이언트 (AIProjectClient 래퍼)
+    ├── api/
+    │   └── app.py        # FastAPI REST API 서버
+    └── console_app.py    # 콘솔 데모 앱 (API 서버에 HTTP POST 전송)
+```
+
+---
+
+## Chapter 3. 환경 변수 설정
+
+`.env.example`을 복사하여 `.env`를 생성한 뒤, 아래 표를 참고하여 값을 입력하세요.
+
+| 환경 변수 | 예시 값 | 설명 |
 |---|---|---|
-| `MCP_SERVER_HOST` | `localhost` | Host the MCP server listens on |
-| `MCP_SERVER_PORT` | `8000` | Port the MCP server listens on |
-| `API_HOST` | `localhost` | Host the API server listens on |
-| `API_PORT` | `8080` | Port the API server listens on |
-| `LOG_LEVEL` | `DEBUG` | Logging verbosity |
+| `AZURE_AI_PROJECT_ENDPOINT` | `https://<your-ai-services-account>.services.ai.azure.com/api/projects/<your-project-name>` | Azure AI Foundry 프로젝트 엔드포인트 URL |
+| `AZURE_AI_MODEL_DEPLOYMENT_NAME` | `gpt-4o` | 사용할 AI 모델의 배포 이름 |
+| `AZURE_AI_AGENT_NAME` | `agent-name-01` | 에이전트 이름 (없으면 자동 생성) |
+| `API_HOST` | `localhost` | API 서버가 바인딩할 호스트 |
+| `API_PORT` | `8080` | API 서버가 수신할 포트 |
+| `LOG_LEVEL` | `DEBUG` | 로그 출력 레벨 (`DEBUG` / `INFO` / `WARNING` / `ERROR`) |
+| `MCP_SERVER_LABEL` | `Description_for_this_email_MCP_Server` | MCP 서버에 대한 설명 레이블 |
+| `MCP_SERVER_URL` | `http://127.0.0.1/mcp` | MCP 서버의 엔드포인트 URL |
+| `MCP_REQUIRE_APPROVAL` | `never` | 툴 호출 승인 정책 (`never` = 자동 승인) |
+| `MCP_SERVER_CONNECTION_NAME` | `<your-mcp-connection-name>_mcp` | Foundry 프로젝트에 등록된 MCP 서버 연결 이름 |
 
-### 4. Run the MCP server (Terminal 1)
+---
 
-```bash
-uv run mcp-server
-```
+## Chapter 4. 실행 방법
 
-The server starts at `http://localhost:8000/mcp` using the **Streamable HTTP** transport.
+두 개의 터미널을 열어 아래 순서대로 실행하세요.
 
-### 5. Run the console demo (Terminal 2)
-
-```bash
-uv run console-app
-```
-
-This will:
-- Create an agent in your Foundry project backed by the local MCP server.
-- Create a conversation thread.
-- Send a **customer-inquiry** structured input payload and print the agent's response.
-- Send a **data-analysis** structured input payload and print the agent's response.
-- Delete the agent version.
-
-### 6. Run the API server (optional, Terminal 2)
+### Terminal 1 — API 서버 실행
 
 ```bash
 uv run api-server
 ```
 
-The API is available at `http://localhost:8080`.  Interactive docs: `http://localhost:8080/docs`.
+- **역할**: FastAPI 기반 REST API 서버를 시작합니다.
+- 기본 주소: `http://localhost:8080`
+- 인터랙티브 API 문서: `http://localhost:8080/docs`
+- 클라이언트(콘솔 앱)로부터 POST 요청을 받아 Azure AI Foundry 에이전트와 통신합니다.
+- 에이전트가 존재하지 않으면 **서버 시작 시 자동으로 생성**합니다.
+
+**예상 출력:**
+
+```
+INFO:     Uvicorn running on http://localhost:8080 (Press CTRL+C to quit)
+INFO:     Agent 'agent-name-01' found. Skipping creation.
+INFO:     Application startup complete.
+```
 
 ---
 
-## API Reference
-
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/health` | Service health check |
-| `POST` | `/api/agents` | Create an agent version |
-| `DELETE` | `/api/agents` | Delete the active agent version |
-| `POST` | `/api/conversations` | Create a new conversation |
-| `POST` | `/api/conversations/{id}/messages` | Send structured input to the agent |
-
-### Example: end-to-end with `curl`
+### Terminal 2 — 콘솔 앱 실행
 
 ```bash
-# 1. Create agent
-curl -s -X POST http://localhost:8080/api/agents | jq
-
-# 2. Create conversation
-curl -s -X POST http://localhost:8080/api/conversations | jq
-
-# 3. Send structured input (replace <conversation_id> from step 2)
-curl -s -X POST http://localhost:8080/api/conversations/<conversation_id>/messages \
-  -H "Content-Type: application/json" \
-  -d '{
-    "structured_input": {
-      "type": "customer_inquiry",
-      "customer_id": "CUST-001",
-      "inquiry_type": "billing",
-      "message": "I was charged twice for my subscription.",
-      "priority": "high",
-      "metadata": {"account_tier": "premium"}
-    }
-  }' | jq
+uv run console-app
 ```
 
----
+- **역할**: API 서버에 HTTP POST 요청을 전송하는 데모 클라이언트입니다.
+- `user_prompt`, `recipient`, `subject`, `incidentId`가 담긴 JSON body를 API 서버로 전송합니다.
+- API 서버 → Foundry 에이전트 → MCP 이메일 툴 호출의 전체 흐름을 실행합니다.
+- 에이전트의 최종 응답을 콘솔에 출력합니다.
 
-## Project Structure
+**예상 출력:**
 
 ```
-.
-├── .env.example              # Environment variable template
-├── .python-version           # Pins Python 3.13 for uv
-├── pyproject.toml            # Project metadata and dependencies
-├── README.md
-└── src/
-    ├── mcp_server/
-    │   └── server.py         # FastMCP HTTP Streamable MCP server
-    ├── agent/
-    │   └── client.py         # Azure AI Foundry agent client
-    ├── api/
-    │   └── app.py            # FastAPI REST API (front-end integration)
-    └── console_app.py        # Console demo (end-to-end flow)
+[POST] http://localhost:8080/api/conversations
+[INFO] Conversation created: conv_xxxxxxxx
+[POST] http://localhost:8080/api/conversations/conv_xxxxxxxx/messages
+[INFO] Agent response: 이메일이 성공적으로 전송되었습니다. 수신자: kunhoko@kakao.com
 ```
-
----
-
-## Authentication
-
-Authentication to Azure uses **Entra ID** via [`DefaultAzureCredential`](https://learn.microsoft.com/python/api/azure-identity/azure.identity.defaultazurecredential).
-
-Run `az login` (Azure CLI) before executing the demos, or configure a service principal / managed identity in your deployment environment.
-
----
-
-## MCP Tools Exposed
-
-| Tool | Description |
-|---|---|
-| `process_customer_inquiry` | Routes a structured customer inquiry and returns a ticket |
-| `run_data_analysis` | Runs a simulated data analysis and returns insights |
-| `get_server_status` | Returns the MCP server status and list of available tools |
