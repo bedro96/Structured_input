@@ -177,7 +177,7 @@ structured_inputs={
 
 위의 흐름이 정상적으로 완료되면, 에이전트는 MCP 서버의 이메일 전송 툴을 호출하여 지정된 수신자에게 인시던트 알림 이메일을 전송합니다.
 
-![이메일 전송 결과](img/emailcapture.png)
+<img src="img/email_message.jpg" alt="이메일 전송 결과" width="480"/>
 
 ---
 
