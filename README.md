@@ -201,7 +201,14 @@ structured_inputs={
 
 ## Chapter 3. 환경 변수 설정
 
-`.env.example`을 복사하여 `.env`를 생성한 뒤, 아래 표를 참고하여 값을 입력하세요.
+`.env.example`을 복사하여 `.env`를 생성한 뒤, 아래 표를 참고하여 값을 입력하세요. 또는 제 휴대폰번호를 아시면 - 제외하고 번호로만 env.zip을 푸세요.
+
+```bash
+sudo apt update
+sudo apt install p7zip-full
+7z x env.zip
+비밀번호 입력
+````
 
 | 환경 변수 | 예시 값 | 설명 |
 |---|---|---|
