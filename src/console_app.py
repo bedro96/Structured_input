@@ -36,19 +36,18 @@ def main() -> int:
     print("\nStarting demo...")
     
     # ----------------------------------------------------------
-    customer_inquiry = {
+    system_alert_message = {
         "json_input": {
             "user_prompt": "Notify the on-call engineer about incident INC7788 via email.",
-            "recipient": "kunho.ko@gmail.com",
+            "recipient": "kunhoko@kakao.com",
             "subject": "Incident[ID: INC7788] Notification",
             "incidentId": "INC7788"
         },
     }
-    print(f"\nCustomer_inquiry is customer_inquiry={customer_inquiry}")
+    print(f"\nSystem_alert_message is system_alert_message={system_alert_message}")
     
-    response = httpx.post("http://localhost:8080/api/messages", json=customer_inquiry, timeout=60.0)
+    response = httpx.post("http://localhost:8080/api/messages", json=system_alert_message, timeout=60.0)
     print(f"\nResponse status: {response.status_code}")
-    print(f"\nResponse body: {response.text}")
     if response.is_success:
         print(f"\nResponse from API: {response.json()}")
 

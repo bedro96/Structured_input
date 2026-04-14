@@ -114,7 +114,7 @@ class FoundryAgentClient:
             model=self._model,
             instructions=(
                 "Process the following structured json input."
-                "These variables has highest priority and must be used for calling MCP tools: \n\n"
+                "It is imperative to use following variables for calling MCP tools. These variables have highest priority over any other means and must be used for calling MCP tools: \n\n"
                 "{{recipient}} is email recipient for MCP server\n"
                 "{{subject}} is email subject for MCP server\n"
                 "{{incidentId}} is incident ID that is intended to use to compose email body.\n"
