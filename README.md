@@ -189,6 +189,10 @@ structured_inputs={
 ├── .python-version       # Python 3.13 버전 고정 (uv)
 ├── pyproject.toml        # 프로젝트 메타데이터 및 의존성 (uv)
 ├── README.md
+├── .github/
+│   └── skills/           # GitHub Copilot용 SKILL.md 정의 (토픽별 서브폴더)
+│       ├── foundry-agent-definition/SKILL.md
+│       └── foundry-agent-usage/SKILL.md
 └── src/
     ├── agent/
     │   └── client.py     # Azure AI Foundry 에이전트 클라이언트 (AIProjectClient 래퍼)
