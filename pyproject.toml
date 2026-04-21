@@ -20,6 +20,7 @@ dependencies = [
 [project.scripts]
 console-app = "src.console_app:main"
 api-server = "src.api.app:main"
+skills-demo = "src.skills.foundry_agent_skill:_demo_main"
 
 [build-system]
 requires = ["hatchling"]
