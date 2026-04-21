@@ -189,121 +189,17 @@ structured_inputs={
 ├── .python-version       # Python 3.13 버전 고정 (uv)
 ├── pyproject.toml        # 프로젝트 메타데이터 및 의존성 (uv)
 ├── README.md
+├── .github/
+│   └── skills/           # GitHub Copilot용 SKILL.md 정의 (토픽별 서브폴더)
+│       ├── foundry-agent-definition/SKILL.md
+│       └── foundry-agent-usage/SKILL.md
 └── src/
     ├── agent/
     │   └── client.py     # Azure AI Foundry 에이전트 클라이언트 (AIProjectClient 래퍼)
     ├── api/
     │   └── app.py        # FastAPI REST API 서버
-    ├── skills/
-    │   ├── __init__.py                 # 패키지 공개 인터페이스
-    │   └── foundry_agent_skill.py     # FoundryAgentSkill — 에이전트를 SKILL로 래핑
     └── console_app.py    # 콘솔 데모 앱 (API 서버에 HTTP POST 전송)
 ```
-
----
-
-## Chapter 5. FoundryAgentSkill — SKILL 사용법
-
-`FoundryAgentSkill`은 `FoundryAgentClient` 클래스를 AI 파이프라인에서 **재사용 가능한 스킬(Skill)** 로 노출하는 래퍼입니다.  
-Semantic Kernel, AutoGen, LangChain 등 어떤 오케스트레이터에서도 도구(Tool) 또는 스킬로 등록할 수 있습니다.
-
-### 5-1. SKILL 구성 요소
-
-| 구성 요소 | 설명 |
-|---|---|
-| `SkillInput` | 스킬 입력 스키마 (Pydantic). `user_prompt`, `recipient`, `subject`, `incidentId`, `conversation_id` 포함 |
-| `SkillOutput` | 스킬 출력 스키마 (Pydantic). `output`(에이전트 응답), `conversation_id`, `skill_name` 포함 |
-| `@skill_function` | 함수에 이름·설명·입출력 메타데이터를 부착하는 데코레이터 |
-| `FoundryAgentSkill` | 스킬 클래스 — `run()` 단일 진입점으로 에이전트 생명주기, 대화 관리, 구조화된 입력 전송을 처리 |
-
-### 5-2. 기본 사용법
-
-```python
-from src.skills import FoundryAgentSkill, SkillInput
-
-skill = FoundryAgentSkill()
-payload = SkillInput(
-    user_prompt="Notify the on-call engineer about INC0042 via email.",
-    recipient="oncall@example.com",
-    subject="Incident[ID: INC0042] Notification",
-    incident_id="INC0042",      # 또는 alias: incidentId="INC0042"
-)
-result = skill.run(payload)
-print(result.output)            # 에이전트의 최종 텍스트 응답
-print(result.conversation_id)  # 다음 턴에 재사용할 대화 ID
-```
-
-### 5-3. 컨텍스트 매니저 사용 (리소스 자동 정리)
-
-```python
-from src.skills import FoundryAgentSkill, SkillInput
-
-with FoundryAgentSkill() as skill:
-    result = skill.run(SkillInput(
-        user_prompt="...",
-        recipient="oncall@example.com",
-        subject="Incident[ID: INC0042] Notification",
-        incident_id="INC0042",
-    ))
-    print(result.output)
-# __exit__ 시 AIProjectClient 및 Credential 리소스 자동 해제
-```
-
-### 5-4. 다중 턴(Multi-turn) 대화
-
-```python
-from src.skills import FoundryAgentSkill, SkillInput
-
-with FoundryAgentSkill() as skill:
-    # 첫 번째 턴
-    r1 = skill.run(SkillInput(
-        user_prompt="INC0042 알림 이메일을 보내줘.",
-        recipient="oncall@example.com",
-        subject="Incident[ID: INC0042] Notification",
-        incident_id="INC0042",
-    ))
-    # 두 번째 턴 — 같은 대화 이어가기
-    r2 = skill.run(SkillInput(
-        user_prompt="방금 보낸 이메일 내용을 요약해줘.",
-        recipient="oncall@example.com",
-        subject="Incident[ID: INC0042] Notification",
-        incident_id="INC0042",
-        conversation_id=r1.conversation_id,   # 이전 대화 ID 전달
-    ))
-    print(r2.output)
-```
-
-### 5-5. 스킬 메타데이터 조회
-
-```python
-from src.skills import FoundryAgentSkill
-import json
-
-skill = FoundryAgentSkill()
-metadata = skill.get_skill_metadata()
-print(json.dumps(metadata, indent=2, ensure_ascii=False, default=str))
-```
-
-출력 예시:
-
-```json
-{
-  "name": "FoundryAgentSkill",
-  "version": "1.0.0",
-  "description": "Azure AI Foundry 에이전트를 통해 구조화된 입력(수신자·제목·인시던트 ID)을 받아 MCP 서버를 호출하여 인시던트 알림 이메일을 전송하는 스킬.",
-  "input_schema": { ... },
-  "output_schema": { ... }
-}
-```
-
-### 5-6. 독립 실행 데모
-
-```bash
-uv run skills-demo
-```
-
-API 서버를 구동하지 않고 **FoundryAgentSkill을 직접** 호출하는 end-to-end 데모입니다.  
-MCP 서버와 `.env` 파일이 준비된 환경에서 실행하세요.
 
 ---
 
